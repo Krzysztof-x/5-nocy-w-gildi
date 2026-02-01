@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <title>FNAF Extended Map Viewer (V.2)</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #050505; }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: #00ff00;
+            font-family: 'Courier New', Courier, monospace;
+            pointer-events: none;
+            text-shadow: 1px 1px 2px black;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">FNAF 1 + Into the Pit + TWB Layout<br>LPM: Obrót | PPM: Przesuwanie | Rolka: Zoom</div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // 1. KONFIGURACJA SCENY
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x050505);
+        scene.fog = new THREE.Fog(0x050505, 10, 100);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 60, 40); // Wyższa kamera, by objąć dużą mapę
+        camera.lookAt(0, 0, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        // 2. ŁADOWANIE TEKSTUR
+        const textureLoader = new THREE.TextureLoader();
+        const floorTexture = textureLoader.load('https://raw.githubusercontent.com/Krzysztof-x/5-nocy-w-gildi/main/Img/Floor.png');
+        const wallTexture = textureLoader.load('https://raw.githubusercontent.com/Krzysztof-x/5-nocy-w-gildi/main/Img/Wall.png');
+
+        [floorTexture, wallTexture].forEach(tex => {
+            tex.wrapS = THREE.RepeatWrapping;
+            tex.wrapT = THREE.RepeatWrapping;
+            tex.colorSpace = THREE.SRGBColorSpace;
+        });
+
+        const floorMaterial = new THREE.MeshStandardMaterial({ map: floorTexture, roughness: 0.8 });
+        const wallMaterial = new THREE.MeshStandardMaterial({ map: wallTexture, roughness: 0.5 });
+
+        // 3. FUNKCJA TWORZENIA POKOI
+        function createRoom(name, x, z, width, depth, height = 6, connectColor = 0xffffff) {
+            const group = new THREE.Group();
+
+            // Podłoga
+            const fGeo = new THREE.PlaneGeometry(width, depth);
+            const fMat = floorMaterial.clone();
+            fMat.map = floorTexture.clone();
+            fMat.map.repeat.set(width / 2, depth / 2);
+            fMat.map.wrapS = THREE.RepeatWrapping;
+            fMat.map.wrapT = THREE.RepeatWrapping;
+            const floor = new THREE.Mesh(fGeo, fMat);
+            floor.rotation.x = -Math.PI / 2;
+            floor.receiveShadow = true;
+            group.add(floor);
+
+            // Ściany
+            const wallThick = 0.2;
+            const createWall = (w, d, px, pz, ry) => {
+                const geo = new THREE.BoxGeometry(w, height, d);
+                const mat = wallMaterial.clone();
+                mat.map = wallTexture.clone();
+                mat.map.repeat.set(w / 2, height / 2);
+                mat.map.wrapS = THREE.RepeatWrapping;
+                mat.map.wrapT = THREE.RepeatWrapping;
+                const mesh = new THREE.Mesh(geo, mat);
+                mesh.position.set(px, height / 2, pz);
+                mesh.rotation.y = ry;
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+                group.add(mesh);
+            };
+
+            createWall(width, wallThick, 0, -depth/2, 0); // N
+            createWall(width, wallThick, 0, depth/2, 0);  // S
+            createWall(wallThick, depth, width/2, 0, 0);  // E
+            createWall(wallThick, depth, -width/2, 0, 0); // W
+
+            // Światło (Marker pokoju)
+            const light = new THREE.PointLight(connectColor, 20, 12);
+            light.position.set(0, height - 1, 0);
+            group.add(light);
+
+            group.position.set(x, 0, z);
+            scene.add(group);
+        }
+
+        // Funkcja do korytarzy łączących (proste podłogi bez ścian, żeby połączyć pokoje wizualnie)
+        function createConnector(x, z, width, depth) {
+            const geo = new THREE.PlaneGeometry(width, depth);
+            const mat = floorMaterial.clone();
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.rotation.x = -Math.PI / 2;
+            mesh.position.set(x, 0.01, z); // Troszkę wyżej żeby nie migotało
+            scene.add(mesh);
+        }
+
+        // 4. GENEROWANIE MAPY (Wg przesłanego obrazka V.2)
+        // Układ: 0,0 to środek Dining Area
+
+        // --- SEKCJA CENTRALNA ---
+        createRoom("Dining Area", 0, 0, 24, 16); // Główne centrum
+        createRoom("Stage", 0, -10, 12, 4);      // Scena (Północ)
+        
+        // --- SEKCJA PÓŁNOCNA (BACKSTAGE / BASEMENT) ---
+        createRoom("Backstage", 0, -16, 8, 6);        // Za sceną
+        createConnector(0, -12.5, 4, 2);              // Łącznik Stage-Backstage
+        createRoom("Basement", 0, -24, 8, 6);         // Piwnica (najwyżej na mapie)
+        createConnector(0, -19.5, 2, 2);              // Łącznik Backstage-Basement
+
+        // --- SEKCJA PÓŁNOCNY-WSCHÓD (OTHER ENTRANCE) ---
+        createRoom("Other Entrance", 16, -10, 8, 8);  // Prawo góra
+        createConnector(12, -8, 2, 4);                // Łącznik do Dining
+
+        // --- SEKCJA PÓŁNOCNY-ZACHÓD (BALLPIT) ---
+        createRoom("Ballpit", -16, -10, 8, 8, 5, 0x0000ff); // Lewo góra (Into the Pit)
+        createConnector(-12, -8, 2, 4);                     // Łącznik do Dining
+
+        // --- SEKCJA ZACHODNIA (PARTY ROOMS) ---
+        // Lewa kolumna pomieszczeń
+        const westColX = -18;
+        createRoom("Kitchen/Backstage Left", -18, -2, 6, 6);
+        
+        createRoom("Party Room 2", -28, -2, 10, 10);        // Duży pokój po lewej
+        
+        createRoom("Party Room Hall", -28, 6, 10, 4);       // Korytarz między Party Rooms
+        createConnector(-28, 3.5, 4, 2);                    // PR2 -> Hall
+        createConnector(-22, 6, 2, 4);                      // Hall -> Dining (przez ścianę)
+
+        createRoom("Party Room 1", -28, 14, 10, 10);        // Dolny Party Room
+        createConnector(-28, 8.5, 4, 2);                    // Hall -> PR1
+
+        createRoom("Pirates Cove", -14, 6, 6, 6, 5, 0xa020f0); // Wewnątrz/przy Dining Area (lewy dół)
+
+        // --- SEKCJA POŁUDNIOWO-ZACHODNIA (ARCADE & ENTRANCE) ---
+        createRoom("Arcade", -28, 26, 14, 10, 6, 0xff00ff); // Arcade (fioletowy neon)
+        createConnector(-28, 20, 4, 2);                     // PR1 -> Arcade
+
+        createRoom("Main Entrance", -24, 34, 12, 6);        // Wejście główne (dół lewo)
+        createConnector(-26, 31, 2, 2);                     // Arcade -> Entrance
+
+        // --- SEKCJA POŁUDNIOWA (OFFICE HUB) ---
+        createRoom("West Hall", -6, 18, 6, 16);     // Długi korytarz lewy
+        createConnector(-6, 9, 4, 2);               // Dining -> West Hall
+        
+        createRoom("Supply Closet", -12, 20, 4, 6); // Obok West Hall
+        createConnector(-9.5, 20, 2, 2);            // Closet -> West Hall
+
+        createRoom("Office", 0, 28, 10, 6, 6, 0xffaa00); // BIURO (Dół środek)
+        createConnector(-3, 28, 2, 4);                   // West Hall -> Office
+
+        createRoom("East Hall", 6, 18, 6, 16);      // Długi korytarz prawy
+        createConnector(6, 9, 4, 2);                // Dining -> East Hall
+        createConnector(3, 28, 2, 4);               // East Hall -> Office
+
+        // --- SEKCJA WSCHODNIA (RESTROOMS & SAFEROOM) ---
+        const rightColX = 18;
+        createRoom("Restroom Hall", rightColX, 0, 4, 20); // Długi korytarz pionowy
+        createConnector(12.5, 0, 2, 4);                   // Dining -> Restroom Hall
+
+        createRoom("Saferoom", rightColX, -14, 6, 6);     // "Saferoom" (Góra korytarza)
+        createConnector(rightColX, -10.5, 2, 2);
+
+        createRoom("Female Restroom", 24, -4, 6, 6);      // WC Damskie
+        createConnector(20.5, -4, 2, 2);
+
+        createRoom("Male Restroom", 24, 4, 6, 6);         // WC Męskie
+        createConnector(20.5, 4, 2, 2);
+
+        createRoom("Kitchen Main", 16, 18, 10, 10);       // Kuchnia (Dół prawo)
+        createConnector(10, 18, 2, 4);                    // East Hall -> Kitchen
+
+        // 5. OŚWIETLENIE I SCENERIA
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.05);
+        scene.add(ambientLight);
+
+        // Dodatkowe światło kierunkowe dla cieni
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.1);
+        dirLight.position.set(50, 50, -50);
+        scene.add(dirLight);
+
+        // 6. STEROWANIE
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.target.set(0, 0, 10);
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>
