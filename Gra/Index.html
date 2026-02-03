@@ -19,7 +19,7 @@
     </style>
 </head>
 <body>
-    <div id="info">FNAF 1 + Into the Pit + TWB Layout<br>LPM: Obrót | PPM: Przesuwanie | Rolka: Zoom</div>
+    <div id="info">FNAF 1 + Into the Pit + TWB Layout<br>LPM: Obrót | PPM: Przesuwanie | Rolka: Zoom | Kliknij przyciski na ścianach: drzwi + światło</div>
 
     <script type="importmap">
         {
@@ -57,13 +57,16 @@
             tex.wrapS = THREE.RepeatWrapping;
             tex.wrapT = THREE.RepeatWrapping;
             tex.colorSpace = THREE.SRGBColorSpace;
+            if (renderer.capabilities) tex.anisotropy = Math.min(16, renderer.capabilities.getMaxAnisotropy?.() || 16);
+            tex.minFilter = THREE.LinearMipmapLinearFilter;
+            tex.magFilter = THREE.LinearFilter;
         });
 
         const floorMaterial = new THREE.MeshStandardMaterial({ map: floorTexture, roughness: 0.8 });
         const wallMaterial = new THREE.MeshStandardMaterial({ map: wallTexture, roughness: 0.5 });
 
         // 3. FUNKCJA TWORZENIA POKOI
-        function createRoom(name, x, z, width, depth, height = 6, connectColor = 0xffffff) {
+        function createRoom(name, x, z, width, depth, height = 6, connectColor = 0xffffff, openSides = [], dark = false) {
             const group = new THREE.Group();
 
             // Podłoga
@@ -78,32 +81,36 @@
             floor.receiveShadow = true;
             group.add(floor);
 
-            // Ściany
+            // Ściany – PlaneGeometry dla poprawnych UV (bez rozciągania)
             const wallThick = 0.2;
-            const createWall = (w, d, px, pz, ry) => {
-                const geo = new THREE.BoxGeometry(w, height, d);
+            const createWall = (side, faceW, faceH, px, py, pz, rotY = 0) => {
+                if (openSides.includes(side)) return;
+                const geo = new THREE.PlaneGeometry(faceW, faceH);
                 const mat = wallMaterial.clone();
                 mat.map = wallTexture.clone();
-                mat.map.repeat.set(w / 2, height / 2);
+                mat.map.repeat.set(Math.max(faceW / 2, 1), 1);
                 mat.map.wrapS = THREE.RepeatWrapping;
-                mat.map.wrapT = THREE.RepeatWrapping;
+                mat.map.wrapT = THREE.ClampToEdgeWrapping;
+                mat.side = THREE.DoubleSide;
                 const mesh = new THREE.Mesh(geo, mat);
-                mesh.position.set(px, height / 2, pz);
-                mesh.rotation.y = ry;
+                mesh.position.set(px, py, pz);
+                mesh.rotation.y = rotY;
                 mesh.castShadow = true;
                 mesh.receiveShadow = true;
                 group.add(mesh);
             };
 
-            createWall(width, wallThick, 0, -depth/2, 0); // N
-            createWall(width, wallThick, 0, depth/2, 0);  // S
-            createWall(wallThick, depth, width/2, 0, 0);  // E
-            createWall(wallThick, depth, -width/2, 0, 0); // W
+            createWall('N', width, height, 0, height/2, -depth/2, 0);
+            createWall('S', width, height, 0, height/2, depth/2, Math.PI);
+            createWall('E', depth, height, width/2, height/2, 0, -Math.PI/2);
+            createWall('W', depth, height, -width/2, height/2, 0, Math.PI/2);
 
-            // Światło (Marker pokoju)
-            const light = new THREE.PointLight(connectColor, 20, 12);
-            light.position.set(0, height - 1, 0);
-            group.add(light);
+            // Światło (Marker pokoju) – pomijane dla ciemnych korytarzy
+            if (!dark) {
+                const light = new THREE.PointLight(connectColor, 20, 12);
+                light.position.set(0, height - 1, 0);
+                group.add(light);
+            }
 
             group.position.set(x, 0, z);
             scene.add(group);
@@ -164,18 +171,18 @@
         createConnector(-26, 31, 2, 2);                     // Arcade -> Entrance
 
         // --- SEKCJA POŁUDNIOWA (OFFICE HUB) ---
-        createRoom("West Hall", -6, 18, 6, 16);     // Długi korytarz lewy
+        createRoom("West Hall", -6, 18, 6, 16, 6, 0xffffff, ['E'], true); // Ciemny korytarz
         createConnector(-6, 9, 4, 2);               // Dining -> West Hall
         
         createRoom("Supply Closet", -12, 20, 4, 6); // Obok West Hall
         createConnector(-9.5, 20, 2, 2);            // Closet -> West Hall
 
-        createRoom("Office", 0, 28, 10, 6, 6, 0xffaa00); // BIURO (Dół środek)
-        createConnector(-3, 28, 2, 4);                   // West Hall -> Office
+        createRoom("Office", 0, 24, 6, 5, 6, 0xffaa00, ['W','E']); // BIURO – bez ścian W/E (korytarze)
+        createConnector(-3, 25, 2, 4);                   // West Hall -> Office
 
-        createRoom("East Hall", 6, 18, 6, 16);      // Długi korytarz prawy
+        createRoom("East Hall", 6, 18, 6, 16, 6, 0xffffff, ['W'], true); // Ciemny korytarz
         createConnector(6, 9, 4, 2);                // Dining -> East Hall
-        createConnector(3, 28, 2, 4);               // East Hall -> Office
+        createConnector(3, 25, 2, 4);               // East Hall -> Office
 
         // --- SEKCJA WSCHODNIA (RESTROOMS & SAFEROOM) ---
         const rightColX = 18;
@@ -194,12 +201,117 @@
         createRoom("Kitchen Main", 16, 18, 10, 10);       // Kuchnia (Dół prawo)
         createConnector(10, 18, 2, 4);                    // East Hall -> Kitchen
 
+        // 4b. FNAF DRZWI – układ jak na szkicu: [ściana] [duże drzwi] [ściana z przyciskami]
+        const officeZ = 24;
+        const doorMetal = new THREE.MeshStandardMaterial({ color: 0x8b2a2a, metalness: 0.6, roughness: 0.4 });
+        const wallLight = new THREE.MeshStandardMaterial({ color: 0xe8e4dc, roughness: 0.7 });
+        const panelMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, metalness: 0.5, roughness: 0.5 });
+        const buttonMat = new THREE.MeshStandardMaterial({ color: 0xcc3333 });
+        const doorW = 3.5, doorH = 5.5;
+        const wallThick = 0.4;
+        const clickableButtons = [];
+
+        function createDoorUnit(centerX, isLeft) {
+            const wallGeo = new THREE.BoxGeometry(0.12, doorH, wallThick);
+            const doorGeo = new THREE.PlaneGeometry(doorW, doorH);
+            const dir = isLeft ? 1 : -1;
+            const btnWallZ = officeZ + 2;
+
+            const leftWall = new THREE.Mesh(wallGeo, wallLight.clone());
+            leftWall.position.set(centerX, 3, officeZ - 2);
+            leftWall.rotation.y = isLeft ? Math.PI/2 : -Math.PI/2;
+            leftWall.castShadow = true;
+            scene.add(leftWall);
+
+            const door = new THREE.Mesh(doorGeo, doorMetal.clone());
+            door.position.set(centerX, 7.5, officeZ);
+            door.rotation.y = isLeft ? Math.PI/2 : -Math.PI/2;
+            door.name = isLeft ? 'leftDoor' : 'rightDoor';
+            door.castShadow = true;
+            scene.add(door);
+
+            const rightWall = new THREE.Mesh(wallGeo.clone(), wallLight.clone());
+            rightWall.position.set(centerX, 3, officeZ + 2);
+            rightWall.rotation.y = isLeft ? Math.PI/2 : -Math.PI/2;
+            rightWall.castShadow = true;
+            scene.add(rightWall);
+
+            const panelGeo = new THREE.BoxGeometry(0.08, 1, 0.35);
+            const panel = new THREE.Mesh(panelGeo, panelMat.clone());
+            panel.position.set(centerX + dir * 0.1, 2.5, btnWallZ);
+            panel.rotation.y = isLeft ? Math.PI/2 : -Math.PI/2;
+            scene.add(panel);
+
+            const btnY1 = 2.85, btnY2 = 2.15;
+            const btnZ = btnWallZ + 0.15;
+            const btnX = centerX + dir * 0.06;
+            const b1 = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.08, 16), buttonMat.clone());
+            b1.position.set(btnX, btnY1, btnZ);
+            b1.rotation.x = Math.PI/2;
+            b1.userData = { type: isLeft ? 'leftDoor' : 'rightDoor' };
+            scene.add(b1);
+            clickableButtons.push(b1);
+            const b2 = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.08, 16), buttonMat.clone());
+            b2.position.set(btnX, btnY2, btnZ);
+            b2.rotation.x = Math.PI/2;
+            b2.userData = { type: isLeft ? 'leftLight' : 'rightLight' };
+            scene.add(b2);
+            clickableButtons.push(b2);
+
+            return door;
+        }
+
+        const leftDoor = createDoorUnit(-3, true);
+        const rightDoor = createDoorUnit(3, false);
+
+        let leftDoorClosed = false, rightDoorClosed = false;
+        const doorOpenY = 7.5, doorClosedY = 3;
+
+        const leftHallLight = new THREE.SpotLight(0xffdd88, 3, 30, Math.PI / 5, 0.4);
+        leftHallLight.position.set(-5, 5, officeZ - 2);
+        leftHallLight.target.position.set(-12, 0, officeZ - 2);
+        scene.add(leftHallLight);
+        scene.add(leftHallLight.target);
+        leftHallLight.visible = false;
+
+        const rightHallLight = new THREE.SpotLight(0xffdd88, 3, 30, Math.PI / 5, 0.4);
+        rightHallLight.position.set(5, 5, officeZ - 2);
+        rightHallLight.target.position.set(12, 0, officeZ - 2);
+        scene.add(rightHallLight);
+        scene.add(rightHallLight.target);
+        rightHallLight.visible = false;
+
+        let leftLightOn = false, rightLightOn = false;
+
+        // Raycaster dla kliknięć przycisków (jak w FNAF)
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        let mouseDownPos = null;
+        renderer.domElement.addEventListener('mousedown', e => { if (e.button === 0) mouseDownPos = { x: e.clientX, y: e.clientY }; });
+        renderer.domElement.addEventListener('mouseup', e => {
+            if (e.button !== 0 || !mouseDownPos) return;
+            const dx = e.clientX - mouseDownPos.x, dy = e.clientY - mouseDownPos.y;
+            if (Math.abs(dx) > 5 || Math.abs(dy) > 5) return; // tylko klik, nie przeciąganie
+            mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(clickableButtons);
+            if (intersects.length > 0) {
+                const obj = intersects[0].object;
+                const t = obj.userData.type;
+                if (t === 'leftDoor') leftDoorClosed = !leftDoorClosed;
+                if (t === 'rightDoor') rightDoorClosed = !rightDoorClosed;
+                if (t === 'leftLight') { leftLightOn = !leftLightOn; rightLightOn = false; }
+                if (t === 'rightLight') { rightLightOn = !rightLightOn; leftLightOn = false; }
+            }
+            mouseDownPos = null;
+        });
+
         // 5. OŚWIETLENIE I SCENERIA
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.05);
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.03);
         scene.add(ambientLight);
 
-        // Dodatkowe światło kierunkowe dla cieni
-        const dirLight = new THREE.DirectionalLight(0xffffff, 0.1);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.08);
         dirLight.position.set(50, 50, -50);
         scene.add(dirLight);
 
@@ -208,8 +320,14 @@
         controls.enableDamping = true;
         controls.target.set(0, 0, 10);
 
+        const doorSpeed = 0.15;
         function animate() {
             requestAnimationFrame(animate);
+            const dt = 0.016;
+            leftDoor.position.y += (leftDoorClosed ? doorClosedY - leftDoor.position.y : doorOpenY - leftDoor.position.y) * Math.min(doorSpeed * 60 * dt, 1);
+            rightDoor.position.y += (rightDoorClosed ? doorClosedY - rightDoor.position.y : doorOpenY - rightDoor.position.y) * Math.min(doorSpeed * 60 * dt, 1);
+            leftHallLight.visible = leftLightOn;
+            rightHallLight.visible = rightLightOn;
             controls.update();
             renderer.render(scene, camera);
         }
